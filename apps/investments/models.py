@@ -248,6 +248,42 @@ class InvestmentTransaction(models.Model):
         return f'{self.date} {self.get_transaction_type_display()} {self.symbol}'
 
 
+class DailyHoldingSnapshot(models.Model):
+    """每日持仓快照（收盘后自动生成）"""
+    holding = models.ForeignKey(
+        InvestmentHolding, on_delete=models.CASCADE,
+        related_name='daily_snapshots', verbose_name='持仓',
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name='holding_snapshots', verbose_name='用户',
+    )
+    symbol = models.CharField('代码', max_length=30)
+    name = models.CharField('名称', max_length=50)
+    date = models.DateField('日期')
+    quantity = models.DecimalField('数量', max_digits=15, decimal_places=4)
+    avg_cost = models.DecimalField('成本价', max_digits=15, decimal_places=4)
+    close_price = models.DecimalField('收盘价', max_digits=15, decimal_places=4)
+    previous_close = models.DecimalField('昨收价', max_digits=15, decimal_places=4, default=0)
+    market_value = models.DecimalField('市值', max_digits=15, decimal_places=2)
+    cost_value = models.DecimalField('成本', max_digits=15, decimal_places=2)
+    daily_pl = models.DecimalField('当日盈亏', max_digits=15, decimal_places=2)
+    total_pl = models.DecimalField('累计盈亏', max_digits=15, decimal_places=2)
+    daily_pl_pct = models.DecimalField('当日盈亏%', max_digits=8, decimal_places=2, default=0)
+    total_pl_pct = models.DecimalField('累计盈亏%', max_digits=8, decimal_places=2, default=0)
+    created_at = models.DateTimeField('创建时间', auto_now_add=True)
+
+    class Meta:
+        db_table = 'investment_daily_snapshots'
+        verbose_name = '每日持仓快照'
+        verbose_name_plural = verbose_name
+        unique_together = [['holding', 'date']]
+        ordering = ['-date']
+
+    def __str__(self):
+        return f'{self.date} {self.symbol} 日盈亏={self.daily_pl}'
+
+
 class DividendRecord(models.Model):
     """分红/利息记录"""
     DIVIDEND_TYPE_CHOICES = [

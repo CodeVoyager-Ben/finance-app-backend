@@ -71,7 +71,7 @@ DATABASES = {
         'ENGINE': 'django.db.backends.mysql',
         'NAME': os.environ.get('DB_NAME', 'finance_app'),
         'USER': os.environ.get('DB_USER', 'root'),
-        'PASSWORD': os.environ.get('DB_PASSWORD', ''),
+        'PASSWORD': os.environ.get('DB_PASSWORD', 'root'),
         'HOST': os.environ.get('DB_HOST', '127.0.0.1'),
         'PORT': os.environ.get('DB_PORT', '3306'),
         'OPTIONS': {
@@ -134,3 +134,6 @@ SPECTACULAR_SETTINGS = {
     'TITLE': 'Finance App API',
     'VERSION': '1.0.0',
 }
+
+# 定时任务：自动更新股票价格
+AUTO_UPDATE_STOCK_PRICES = True  # 设为 False 可关闭

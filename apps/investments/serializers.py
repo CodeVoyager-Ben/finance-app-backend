@@ -2,7 +2,7 @@ from rest_framework import serializers
 from .models import (
     AssetType, ExchangeRate,
     InvestmentAccount, InvestmentHolding, InvestmentTransaction,
-    DividendRecord,
+    DividendRecord, DailyHoldingSnapshot,
 )
 from ..transactions.models import Account
 from .services import to_cny, get_rate
@@ -50,13 +50,14 @@ class InvestmentAccountSerializer(serializers.ModelSerializer):
     fund_account_detail = FundAccountBriefSerializer(source='fund_account', read_only=True)
     total_market_value = serializers.SerializerMethodField()
     total_market_value_cny = serializers.SerializerMethodField()
+    total_assets = serializers.SerializerMethodField()
 
     class Meta:
         model = InvestmentAccount
         fields = [
             'id', 'name', 'broker', 'asset_type', 'asset_type_detail',
             'fund_account', 'fund_account_detail',
-            'currency', 'balance', 'total_market_value', 'total_market_value_cny',
+            'currency', 'balance', 'total_market_value', 'total_market_value_cny', 'total_assets',
             'is_active', 'created_at',
         ]
         read_only_fields = ['id', 'created_at']
@@ -67,6 +68,9 @@ class InvestmentAccountSerializer(serializers.ModelSerializer):
     def get_total_market_value_cny(self, obj):
         total = self.get_total_market_value(obj)
         return to_cny(total, obj.currency)
+
+    def get_total_assets(self, obj):
+        return obj.balance + self.get_total_market_value(obj)
 
 
 # ─── InvestmentHolding ─────────────────────────────────────────
@@ -218,3 +222,17 @@ class DividendRecordCreateSerializer(serializers.ModelSerializer):
         if value <= 0:
             raise serializers.ValidationError('数量必须大于0')
         return value
+
+
+# ─── DailyHoldingSnapshot ──────────────────────────────────────────
+
+class DailyHoldingSnapshotSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DailyHoldingSnapshot
+        fields = [
+            'id', 'holding', 'symbol', 'name', 'date',
+            'quantity', 'avg_cost', 'close_price', 'previous_close',
+            'market_value', 'cost_value',
+            'daily_pl', 'total_pl', 'daily_pl_pct', 'total_pl_pct',
+            'created_at',
+        ]

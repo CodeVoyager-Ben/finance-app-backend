@@ -8,7 +8,7 @@ from rest_framework.response import Response
 from .models import (
     AssetType, ExchangeRate,
     InvestmentAccount, InvestmentHolding, InvestmentTransaction,
-    DividendRecord,
+    DividendRecord, DailyHoldingSnapshot,
 )
 from .serializers import (
     AssetTypeSerializer,
@@ -18,6 +18,7 @@ from .serializers import (
     InvestmentTransactionSerializer, InvestmentTransactionCreateSerializer,
     InvestmentDashboardSerializer,
     DividendRecordSerializer, DividendRecordCreateSerializer,
+    DailyHoldingSnapshotSerializer,
 )
 from .services import update_holding_from_transaction, handle_dividend, to_cny
 from .stock_data import search_security
@@ -233,6 +234,74 @@ class InvestmentHoldingViewSet(viewsets.ModelViewSet):
         }
         return Response(InvestmentDashboardSerializer(data).data)
 
+    @action(detail=False, methods=['post'], url_path='auto-update-prices')
+    def auto_update_prices(self, request):
+        """自动获取所有 A 股持仓的最新价格并更新，保存每日快照"""
+        from datetime import date as date_type
+        today = date_type.today()
+
+        holdings = self.get_queryset().filter(
+            quantity__gt=0,
+            investment_account__asset_type__category='security',
+        )
+        stock_holdings = [h for h in holdings if h.symbol.isdigit() and len(h.symbol) == 6]
+
+        if not stock_holdings:
+            return Response({'detail': '没有需要更新的持仓', 'updated': 0, 'total': 0, 'failed_symbols': []})
+
+        symbols = list(set(h.symbol for h in stock_holdings))
+        from .stock_data import fetch_batch_prices
+        price_map = fetch_batch_prices(symbols)
+
+        updated_count = 0
+        failed_symbols = []
+        for holding in stock_holdings:
+            price_info = price_map.get(holding.symbol)
+            if price_info and price_info.get('current_price'):
+                new_price = Decimal(str(price_info['current_price']))
+                new_prev = Decimal(str(price_info.get('previous_close') or holding.current_price))
+
+                # 保存快照
+                daily_pl = (new_price - new_prev) * holding.quantity
+                daily_pl_pct = ((new_price - new_prev) / new_prev * 100) if new_prev > 0 else Decimal('0')
+                market_value = new_price * holding.quantity
+                cost_value = holding.avg_cost * holding.quantity
+                total_pl = market_value - cost_value
+                total_pl_pct = (total_pl / cost_value * 100) if cost_value > 0 else Decimal('0')
+
+                DailyHoldingSnapshot.objects.update_or_create(
+                    holding=holding, date=today,
+                    defaults={
+                        'user': request.user,
+                        'symbol': holding.symbol,
+                        'name': holding.name,
+                        'quantity': holding.quantity,
+                        'avg_cost': holding.avg_cost,
+                        'close_price': new_price,
+                        'previous_close': new_prev,
+                        'market_value': market_value.quantize(Decimal('0.01')),
+                        'cost_value': cost_value.quantize(Decimal('0.01')),
+                        'daily_pl': daily_pl.quantize(Decimal('0.01')),
+                        'total_pl': total_pl.quantize(Decimal('0.01')),
+                        'daily_pl_pct': daily_pl_pct.quantize(Decimal('0.01')),
+                        'total_pl_pct': total_pl_pct.quantize(Decimal('0.01')),
+                    },
+                )
+
+                holding.previous_close_price = new_prev
+                holding.current_price = new_price
+                holding.save(update_fields=['previous_close_price', 'current_price', 'updated_at'])
+                updated_count += 1
+            else:
+                failed_symbols.append(holding.symbol)
+
+        return Response({
+            'detail': f'成功更新 {updated_count} 个持仓价格',
+            'updated': updated_count,
+            'total': len(stock_holdings),
+            'failed_symbols': list(set(failed_symbols)),
+        })
+
     @action(detail=False, methods=['post'])
     def batch_update_prices(self, request):
         updates = request.data.get('updates', [])
@@ -251,6 +320,46 @@ class InvestmentHoldingViewSet(viewsets.ModelViewSet):
                 except InvestmentHolding.DoesNotExist:
                     continue
         return Response({'detail': '价格更新成功'})
+
+    @action(detail=False, methods=['get'], url_path='daily-snapshots')
+    def daily_snapshots(self, request):
+        """查询每日持仓快照"""
+        queryset = DailyHoldingSnapshot.objects.filter(
+            user=request.user
+        ).order_by('-date', 'symbol')
+
+        symbol = request.query_params.get('symbol')
+        if symbol:
+            queryset = queryset.filter(symbol=symbol)
+
+        date_param = request.query_params.get('date')
+        if date_param:
+            queryset = queryset.filter(date=date_param)
+
+        start_date = request.query_params.get('start_date')
+        end_date = request.query_params.get('end_date')
+        if start_date:
+            queryset = queryset.filter(date__gte=start_date)
+        if end_date:
+            queryset = queryset.filter(date__lte=end_date)
+
+        # 汇总当日盈亏
+        snapshots = list(queryset[:500])
+        daily_summary = {}
+        for s in snapshots:
+            if s.date not in daily_summary:
+                daily_summary[s.date] = {'daily_pl': Decimal('0'), 'total_pl': Decimal('0'), 'count': 0}
+            daily_summary[s.date]['daily_pl'] += s.daily_pl
+            daily_summary[s.date]['total_pl'] += s.total_pl
+            daily_summary[s.date]['count'] += 1
+
+        return Response({
+            'snapshots': DailyHoldingSnapshotSerializer(snapshots, many=True).data,
+            'daily_summary': [
+                {'date': d, **{k: str(v) for k, v in v.items()}}
+                for d, v in sorted(daily_summary.items(), reverse=True)
+            ],
+        })
 
 
 # ─── InvestmentTransaction ─────────────────────────────────────
@@ -274,9 +383,33 @@ class InvestmentTransactionViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         transaction = serializer.save()
-        if transaction.transaction_type in ('buy', 'sell'):
+
+        from .fee_calculator import calculate_buy_fees, calculate_sell_fees
+
+        if transaction.transaction_type == 'buy':
+            amount = transaction.quantity * transaction.price
+            fees = calculate_buy_fees(transaction.price, transaction.quantity)
+            if transaction.fee == 0:
+                transaction.fee = fees['total_fees']
+            transaction.amount = amount
+            transaction.save(update_fields=['amount', 'fee'])
+
+        elif transaction.transaction_type == 'sell':
+            amount = transaction.quantity * transaction.price
+            fees = calculate_sell_fees(transaction.price, transaction.quantity)
+            if transaction.fee == 0:
+                transaction.fee = fees['total_fees']
+            transaction.amount = amount
+            # 自动计算盈亏
+            if transaction.profit_loss == 0 and transaction.holding:
+                holding = transaction.holding
+                transaction.profit_loss = (transaction.price - holding.avg_cost) * transaction.quantity - transaction.fee
+            transaction.save(update_fields=['amount', 'fee', 'profit_loss'])
+
+        elif transaction.transaction_type in ('buy', 'sell'):
             transaction.amount = transaction.quantity * transaction.price
             transaction.save(update_fields=['amount'])
+
         update_holding_from_transaction(transaction)
         output_serializer = InvestmentTransactionSerializer(transaction)
         headers = self.get_success_headers(output_serializer.data)

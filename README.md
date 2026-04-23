@@ -26,7 +26,7 @@
 | 数据库 | MySQL | 8.x |
 | 认证 | SimpleJWT | 5.3+ |
 | API文档 | drf-spectacular | 0.27+ |
-| 其他后端依赖 | django-cors-headers, django-filter, openpyxl, Pillow | - |
+| 其他后端依赖 | django-cors-headers, django-filter, openpyxl, Pillow, akshare, APScheduler | - |
 | 前端框架 | React | 18.3 |
 | 构建工具 | Vite | 6.0 |
 | UI组件库 | Ant Design | 5.22 |
@@ -50,7 +50,7 @@ finance_app/
 │   ├── apps/
 │   │   ├── users/              # 用户模块（注册、登录、JWT）
 │   │   ├── transactions/       # 收支模块（账户、分类、流水、预算）
-│   │   ├── investments/        # 投资模块（资产类型、多币种、持仓、交易、分红、汇率）
+│   │   ├── investments/        # 投资模块（资产类型、多币种、持仓、交易、分红、汇率、自动行情）
 │   │   ├── lending/            # 借贷模块（借贷记录、还款）
 │   │   └── reports/            # 报表模块（资产负债、导出）
 │   ├── utils/                  # 工具（空）
@@ -274,7 +274,9 @@ python manage.py init_categories --username admin  # 指定用户
 | `/api/holdings/{id}/` | PATCH | 更新价格/昨收价/分组标签 |
 | `/api/holdings/dashboard/` | GET | 投资概览（总市值/总成本/总盈亏/日盈亏/累计分红/按类型分组/按币种分组） |
 | `/api/holdings/batch_update_prices/` | POST | 批量更新持仓价格（自动设置昨收价） |
-| `/api/invest-trans/` | GET/POST | 交易记录（支持9种交易类型，自动更新持仓） |
+| `/api/holdings/auto-update-prices/` | POST | 自动获取A股最新价格（东方财富API），保存每日快照 |
+| `/api/holdings/daily-snapshots/` | GET | 每日持仓快照查询（支持日期范围筛选） |
+| `/api/invest-trans/` | GET/POST | 交易记录（支持9种交易类型，自动计算手续费和盈亏） |
 
 **交易类型：** buy（买入）、sell（卖出）、dividend（分红）、interest（利息）、dividend_reinvest（分红再投资）、deposit（入金）、withdraw（出金）、fee（费用）、split（拆股/合股）
 
@@ -495,6 +497,28 @@ User
 | net_amount | Decimal(15,2) | 税后净额 |
 | transaction | OneToOne → InvestmentTransaction | 关联交易记录 |
 
+#### DailyHoldingSnapshot（每日持仓快照）
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| holding | FK → InvestmentHolding | 关联持仓 |
+| user | FK → User | 所属用户 |
+| symbol | CharField(30) | 代码 |
+| name | CharField(50) | 名称 |
+| date | DateField | 快照日期 |
+| quantity | Decimal(15,4) | 持有数量 |
+| avg_cost | Decimal(15,4) | 平均成本 |
+| close_price | Decimal(15,4) | 收盘价 |
+| previous_close | Decimal(15,4) | 昨收价 |
+| market_value | Decimal(15,2) | 市值 |
+| cost_value | Decimal(15,2) | 成本 |
+| daily_pl | Decimal(15,2) | 当日盈亏 |
+| total_pl | Decimal(15,2) | 累计盈亏 |
+| daily_pl_pct | Decimal(8,4) | 当日盈亏% |
+| total_pl_pct | Decimal(8,4) | 累计盈亏% |
+
+**唯一约束：** `['holding', 'date']`，每个持仓每天只有一条快照。
+
 #### LendingRecord（借贷记录）
 
 | 字段 | 类型 | 说明 |
@@ -595,8 +619,12 @@ User
    - 多币种支持（CNY/USD/HKD/EUR/GBP/JPY/AUD/CAD/SGD）+ 人民币自动汇总
    - 分红/利息记录（现金分红/再投资/利息收入）
    - 增强分析：日盈亏、年化收益、持有天数、日均成本、总回报率
-   - 批量价格更新
-   - 记录交易弹窗（根据交易类型条件显示字段）
+   - 自动获取A股最新价格（东方财富行情API），一键更新所有持仓
+   - 每日持仓快照（自动保存收盘数据，支持历史盈亏查看）
+   - 卖出功能：持仓行内卖出按钮，支持数量校验、手续费预估、盈亏预览
+   - 交易自动计算手续费（佣金万2.5最低5元、印花税0.05%、过户费0.001%）
+   - 投资账户总资产展示（余额 + 持仓市值）
+   - 手动/自动批量价格更新
 
 ### 借贷管理 (Lending)
 
@@ -699,6 +727,22 @@ python manage.py init_categories                  # 所有用户
 python manage.py init_categories --username admin  # 指定用户
 ```
 
+### `update_stock_prices`
+
+自动获取所有A股持仓的最新价格，保存每日快照并更新持仓。
+
+```bash
+python manage.py update_stock_prices              # 所有用户（仅交易日执行）
+python manage.py update_stock_prices --force      # 强制执行（忽略交易日判断）
+python manage.py update_stock_prices --user-id 1  # 指定用户
+python manage.py update_stock_prices --dry-run    # 仅预览，不写入数据库
+python manage.py update_stock_prices --symbol 600519  # 仅更新指定代码
+```
+
+**交易日判断：** 工作日（周一至周五）+ 中国法定节假日排除（内置2025-2026年A股休市日历）。
+
+**定时任务：** 在 `settings.py` 中设置 `AUTO_UPDATE_STOCK_PRICES = True` 启用 APScheduler 自动定时任务，工作日 16:05（CST）自动执行价格更新。
+
 ---
 
 ## 关键行为说明
@@ -714,3 +758,9 @@ python manage.py init_categories --username admin  # 指定用户
 9. **全局数据隔离：** 所有 ViewSet 的 `get_queryset()` 都按 `request.user` 过滤，非管理员只能看到自己的数据。
 10. **前端API代理：** Vite 开发服务器将 `/api` 请求代理到 Django 后端（`127.0.0.1:8000`），生产环境需配置 Nginx 反向代理。
 11. **资产类型管理：** 9 个系统预设类型（user=null，不可修改删除），用户可自建扩展。
+12. **自动行情获取：** 通过东方财富 kline API（`push2his.eastmoney.com`）获取A股最新价格和昨收价。使用代理优先+直连回退策略，代理池从 GitHub 免费列表获取并并行验证。
+13. **手续费自动计算：** 买入/卖出交易自动按券商标准费率计算手续费：佣金万2.5（最低5元）、印花税0.05%（仅卖出）、过户费0.001%（双向）。代码在 `fee_calculator.py`。
+14. **每日持仓快照：** 每次价格更新时自动保存 `DailyHoldingSnapshot`，记录当日的收盘价、市值、盈亏等，支持历史盈亏查询。
+15. **定时任务：** 通过 APScheduler（BackgroundScheduler）在工作日 16:05 CST 自动执行 `update_stock_prices` 管理命令，在 Django 进程启动时自动注册（`apps.py` 的 `ready()` 方法）。
+16. **代理IP系统：** `proxy_pool.py` 从 GitHub 免费代理列表（TheSpeedX/PROXY-List、proxifly 等）获取代理，10线程并行验证，300秒缓存。所有外部请求（行情获取、证券搜索）使用代理优先策略，失败自动回退直连。
+17. **投资账户总资产：** `InvestmentAccountSerializer` 计算属性 `total_assets = balance + 总持仓市值`，前端账户卡片直接展示。
