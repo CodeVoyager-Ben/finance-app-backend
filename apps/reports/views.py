@@ -189,19 +189,19 @@ class BalanceSheetView(APIView):
         return Response({
             'date': str(target_date),
             'assets': {
-                'cash': {'items': cash_assets, 'total': total_cash},
-                'invest_balance': invest_balance,
-                'investments': {'items': invest_assets, 'total': total_invest},
-                'receivables': {'items': receivables, 'total': total_receivable},
-                'total': total_assets,
+                'cash': {'items': cash_assets, 'total': round(total_cash, 2)},
+                'invest_balance': round(invest_balance, 2),
+                'investments': {'items': invest_assets, 'total': round(total_invest, 2)},
+                'receivables': {'items': receivables, 'total': round(total_receivable, 2)},
+                'total': round(total_assets, 2),
                 'allocation': allocation,
             },
             'liabilities': {
                 'items': liabilities,
-                'payables': {'items': payables, 'total': total_payable},
-                'total': total_liabilities,
+                'payables': {'items': payables, 'total': round(total_payable, 2)},
+                'total': round(total_liabilities, 2),
             },
-            'net_worth': net_worth,
+            'net_worth': round(net_worth, 2),
             'ratios': ratios,
             'net_worth_change': net_worth_change,
         })
@@ -246,8 +246,8 @@ class BalanceSheetView(APIView):
             'current_ratio': current_ratio if current_ratio != float('inf') else 999,
             'savings_ratio': savings_ratio,
             'investment_ratio': investment_ratio,
-            'month_income': month_income,
-            'month_expense': month_expense,
+            'month_income': round(month_income, 2),
+            'month_expense': round(month_expense, 2),
             'health_level': health_level,
         }
 
@@ -278,7 +278,7 @@ class BalanceSheetView(APIView):
         change_pct = round(change / abs(previous_net_worth) * 100, 2) if previous_net_worth != 0 else 0
 
         return {
-            'current': current_net_worth,
+            'current': round(current_net_worth, 2),
             'previous': round(previous_net_worth, 2),
             'change': round(change, 2),
             'change_pct': change_pct,
