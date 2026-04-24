@@ -219,7 +219,7 @@ class BalanceSheetView(APIView):
         month_start = now.replace(day=1)
         month_tx = Transaction.objects.filter(
             user=user, date__gte=month_start, date__lte=now
-        ).aggregate(
+        ).exclude(account__exclude_from_reports=True).aggregate(
             income=Sum('amount', filter=Q(transaction_type='income')),
             expense=Sum('amount', filter=Q(transaction_type='expense')),
         )
@@ -267,7 +267,7 @@ class BalanceSheetView(APIView):
         # 上月净资产 = 当前净资产 - 本月交易净变动
         month_tx = Transaction.objects.filter(
             user=user, date__gt=last_month_end
-        ).aggregate(
+        ).exclude(account__exclude_from_reports=True).aggregate(
             income=Sum('amount', filter=Q(transaction_type='income')),
             expense=Sum('amount', filter=Q(transaction_type='expense')),
         )
@@ -329,7 +329,7 @@ class NetWorthHistoryView(APIView):
 
         monthly_tx = Transaction.objects.filter(
             user=user, date__gte=start_date
-        ).annotate(
+        ).exclude(account__exclude_from_reports=True).annotate(
             month=TruncMonth('date')
         ).values('month').annotate(
             income=Sum('amount', filter=Q(transaction_type='income')),
@@ -435,7 +435,7 @@ class ExportExcelView(APIView):
             cell.border = thin_border
 
         # Data
-        transactions = Transaction.objects.filter(user=user).select_related('account', 'category')
+        transactions = Transaction.objects.filter(user=user).exclude(account__exclude_from_reports=True).select_related('account', 'category')
         if start_date:
             transactions = transactions.filter(date__gte=start_date)
         if end_date:

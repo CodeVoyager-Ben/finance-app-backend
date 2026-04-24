@@ -104,7 +104,7 @@ class TransactionViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'])
     def daily_summary(self, request):
         """按日汇总"""
-        queryset = self.get_queryset()
+        queryset = self.get_queryset().exclude(account__exclude_from_reports=True)
         year = int(request.query_params.get('year', datetime.now().year))
         month = int(request.query_params.get('month', datetime.now().month))
         queryset = queryset.filter(date__year=year, date__month=month)
@@ -124,7 +124,7 @@ class TransactionViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'])
     def monthly_summary(self, request):
         """按月汇总"""
-        queryset = self.get_queryset()
+        queryset = self.get_queryset().exclude(account__exclude_from_reports=True)
         year = int(request.query_params.get('year', datetime.now().year))
         queryset = queryset.filter(date__year=year)
 
@@ -148,7 +148,7 @@ class TransactionViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'])
     def category_summary(self, request):
         """按分类汇总"""
-        queryset = self.get_queryset()
+        queryset = self.get_queryset().exclude(account__exclude_from_reports=True)
         transaction_type = request.query_params.get('transaction_type', 'expense')
         start_date = request.query_params.get('start_date')
         end_date = request.query_params.get('end_date')
@@ -187,7 +187,7 @@ class TransactionViewSet(viewsets.ModelViewSet):
         """仪表盘数据"""
         today = datetime.now().date()
         month_start = today.replace(day=1)
-        queryset = self.get_queryset()
+        queryset = self.get_queryset().exclude(account__exclude_from_reports=True)
 
         # 本月数据
         month_data = queryset.filter(date__gte=month_start).aggregate(

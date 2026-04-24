@@ -95,7 +95,7 @@ class BudgetSerializer(serializers.ModelSerializer):
         qs = Transaction.objects.filter(
             user=obj.user, transaction_type='expense',
             date__year=obj.year, date__month=obj.month,
-        )
+        ).exclude(account__exclude_from_reports=True)
         if obj.category:
             # 该分类及其子分类的支出
             cat_ids = [obj.category.id] + list(
