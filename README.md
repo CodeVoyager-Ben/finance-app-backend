@@ -441,6 +441,7 @@ User
 | asset_type | FK → AssetType | 资产类型 |
 | currency | CharField(3) | 币种（ISO 4217，默认CNY） |
 | balance | Decimal(15,2) | 账户余额 |
+| initial_investment | Decimal(15,2) | 初始投入金额（手动记录，用于计算真实收益率） |
 | is_active | Boolean | 是否启用 |
 
 #### InvestmentHolding（投资持仓）
@@ -785,7 +786,7 @@ python manage.py backfill_snapshots --start-date 2026-04-27 --end-date 2026-04-3
 15. **每日持仓快照+自动回补：** 每次价格更新时自动保存 `DailyHoldingSnapshot`。`auto_update_prices` 接口除更新当天数据外，还会自动检测并回补最近10天内缺失的交易日快照（通过历史K线API获取历史收盘价），返回信息包含回补数量。
 16. **定时任务：** 通过 APScheduler（BackgroundScheduler）在工作日 16:05 CST 自动执行 `update_stock_prices` 管理命令，在 Django 进程启动时自动注册（`apps.py` 的 `ready()` 方法）。
 17. **代理IP系统（备用）：** `proxy_pool.py` 从 GitHub 免费代理列表（TheSpeedX/PROXY-List、proxifly 等）获取代理，10线程并行验证（最多20个候选），300秒缓存。仅在直连失败时启用，代理获取有总超时保护。
-18. **投资账户总资产：** `InvestmentAccountSerializer` 计算属性 `total_assets = balance + 总持仓市值`，前端账户卡片直接展示。
+18. **投资账户总资产：** `InvestmentAccountSerializer` 计算属性 `total_assets = balance + 总持仓市值`，前端账户卡片直接展示。同时提供 `total_holdings_cost`（持仓总成本）、`account_total_return`（总收益 = total_assets - initial_investment）、`account_total_return_pct`（收益率百分比）三个计算字段，用于历史持仓的真实收益计算。
 19. **快照数据回补命令：** `backfill_snapshots` 管理命令用于手动回补指定日期范围的持仓快照，使用东方财富历史K线API获取历史收盘价和昨收价，自动跳过已有快照的日期。
 20. **投资账户余额保护：** `InvestmentAccountSerializer` 在编辑投资账户时将 `balance` 设为只读，仅创建时允许设置初始余额。投资账户的入金/出金/费用通过 `InvestmentTransaction` 交易系统管理。
 21. **卖出数量校验：** 卖出交易时会校验卖出数量不超过当前持仓数量，超卖会返回错误提示。

@@ -103,6 +103,7 @@ class InvestmentAccountViewSet(viewsets.ModelViewSet):
         total_pl = total_market - total_cost
         total_dividend = sum(h.accumulated_dividend for h in holdings)
 
+        total_assets = account.balance + total_market
         return Response({
             'account': InvestmentAccountSerializer(account).data,
             'holdings_count': holdings.count(),
@@ -111,6 +112,9 @@ class InvestmentAccountViewSet(viewsets.ModelViewSet):
             'total_profit_loss': total_pl,
             'total_dividend_income': total_dividend,
             'total_market_value_cny': to_cny(total_market, account.currency),
+            'initial_investment': account.initial_investment,
+            'account_total_return': total_assets - account.initial_investment,
+            'total_holdings_cost': total_cost,
         })
 
 

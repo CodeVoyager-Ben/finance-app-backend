@@ -88,6 +88,7 @@ class InvestmentAccount(models.Model):
     )
     currency = models.CharField('币种', max_length=3, default='CNY')
     balance = models.DecimalField('账户余额', max_digits=15, decimal_places=2, default=0)
+    initial_investment = models.DecimalField('初始投入金额', max_digits=15, decimal_places=2, default=0)
     is_active = models.BooleanField('是否启用', default=True)
     created_at = models.DateTimeField('创建时间', auto_now_add=True)
 

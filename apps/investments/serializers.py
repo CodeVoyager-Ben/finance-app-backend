@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from rest_framework import serializers
 from .models import (
     AssetType, ExchangeRate,
@@ -51,13 +53,18 @@ class InvestmentAccountSerializer(serializers.ModelSerializer):
     total_market_value = serializers.SerializerMethodField()
     total_market_value_cny = serializers.SerializerMethodField()
     total_assets = serializers.SerializerMethodField()
+    total_holdings_cost = serializers.SerializerMethodField()
+    account_total_return = serializers.SerializerMethodField()
+    account_total_return_pct = serializers.SerializerMethodField()
 
     class Meta:
         model = InvestmentAccount
         fields = [
             'id', 'name', 'broker', 'asset_type', 'asset_type_detail',
             'fund_account', 'fund_account_detail',
-            'currency', 'balance', 'total_market_value', 'total_market_value_cny', 'total_assets',
+            'currency', 'balance', 'initial_investment',
+            'total_market_value', 'total_market_value_cny', 'total_assets',
+            'total_holdings_cost', 'account_total_return', 'account_total_return_pct',
             'is_active', 'created_at',
         ]
         read_only_fields = ['id', 'created_at']
@@ -77,6 +84,17 @@ class InvestmentAccountSerializer(serializers.ModelSerializer):
 
     def get_total_assets(self, obj):
         return obj.balance + self.get_total_market_value(obj)
+
+    def get_total_holdings_cost(self, obj):
+        return sum(h.cost_value for h in obj.holdings.all())
+
+    def get_account_total_return(self, obj):
+        return self.get_total_assets(obj) - obj.initial_investment
+
+    def get_account_total_return_pct(self, obj):
+        if obj.initial_investment == 0:
+            return Decimal('0')
+        return (self.get_account_total_return(obj) / obj.initial_investment) * 100
 
 
 # ─── InvestmentHolding ─────────────────────────────────────────
