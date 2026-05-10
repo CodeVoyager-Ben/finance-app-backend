@@ -217,6 +217,7 @@ python manage.py init_categories --username admin  # 指定用户
 | `/api/transactions/` | GET | 流水列表（支持筛选、搜索、排序、分页） |
 | `/api/transactions/` | POST | 创建流水（自动更新账户余额） |
 | `/api/transactions/{id}/` | PATCH/DELETE | 修改/删除（自动回滚再重算余额） |
+| `/api/transactions/filter_summary/` | GET | 筛选汇总（参数同列表接口，返回 income/expense/count/balance） |
 | `/api/transactions/daily_summary/` | GET | 按日汇总（参数: year, month） |
 | `/api/transactions/monthly_summary/` | GET | 按月汇总（参数: year） |
 | `/api/transactions/category_summary/` | GET | 按分类汇总（参数: transaction_type, start_date, end_date, year, month） |
@@ -296,7 +297,7 @@ python manage.py init_categories --username admin  # 指定用户
 | 端点 | 方法 | 说明 |
 |------|------|------|
 | `/api/lending-records/` | GET/POST | 借贷记录 CRUD |
-| `/api/lending-records/summary/` | GET | 汇总（总借出/总借入/待收回/待归还/利息） |
+| `/api/lending-records/summary/` | GET | 汇总（总借出/总借入/待收回/待归还/利息，支持 start_date/end_date 筛选） |
 | `/api/repayments/` | GET/POST | 还款记录（自动更新父记录的已还金额和状态） |
 
 **记录类型：** lend（借出）、borrow（借入）
@@ -576,9 +577,9 @@ User
 ### 收支记账 (Transactions)
 
 1. **类型筛选：** Segmented 切换（全部/支出/收入/转账/还信用卡）
-2. **多条件筛选：** 账户筛选、分类筛选（层级下拉）、日期范围选择、备注关键词搜索，支持一键重置
-3. **筛选汇总统计：** 显示筛选结果的总笔数、总收入、总支出、结余
-4. **交易列表：** 表格展示日期/分类/类型/账户/金额/备注/操作。转账显示"源账户 → 目标账户"。支持服务端分页。
+2. **多条件筛选：** 账户筛选、分类筛选（层级下拉）、日期筛选（全部时间/按月/按年/自定义范围）、备注关键词搜索，支持一键重置
+3. **筛选汇总统计：** 后端 `filter_summary` 接口返回全量统计（总笔数、总收入、总支出、结余），不受分页影响
+4. **交易列表：** 表格展示日期/分类/类型/账户/金额/备注/操作。转账显示"源账户 → 目标账户"。日期列和金额列支持排序，服务端分页。
 5. **快速记账抽屉：**
    - 4个类型按钮（支出红/收入绿/转账蓝/还信用卡紫）
    - 分类选择网格（5列，emoji图标）
@@ -638,8 +639,8 @@ User
 
 ### 借贷管理 (Lending)
 
-1. **4张汇总卡片：** 总借出/总借入/待收回/待归还
-2. **借出/借入 Tab 切换 + 状态筛选**（全部/未还清/部分归还/已结清/已核销）
+1. **4张汇总卡片：** 总借出/总借入/待收回/待归还（响应时间筛选）
+2. **借出/借入 Tab 切换 + 日期筛选**（全部时间/按月/按年/自定义）**+ 状态筛选**（全部/未还清/部分归还/已结清/已核销）
 3. **记录表格：** 对方/金额/已还/剩余/状态/日期/预计归还/事由/操作
 4. **新增/编辑弹窗：** 类型/对方/金额/关联账户/日期/预计归还日期/事由/备注
 5. **还款弹窗：** 显示汇总信息，录入还款类型/金额/利息/账户/日期

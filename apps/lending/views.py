@@ -23,9 +23,16 @@ class LendingRecordViewSet(viewsets.ModelViewSet):
     ordering_fields = ['date', 'amount', 'created_at']
 
     def get_queryset(self):
-        return LendingRecord.objects.filter(
+        qs = LendingRecord.objects.filter(
             user=self.request.user
         ).prefetch_related('repayments')
+        start_date = self.request.query_params.get('start_date')
+        end_date = self.request.query_params.get('end_date')
+        if start_date:
+            qs = qs.filter(date__gte=start_date)
+        if end_date:
+            qs = qs.filter(date__lte=end_date)
+        return qs
 
     def get_serializer_class(self):
         if self.action in ('create', 'update', 'partial_update'):

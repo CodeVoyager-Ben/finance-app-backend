@@ -244,8 +244,7 @@ class InvestmentHoldingViewSet(viewsets.ModelViewSet):
     def auto_update_prices(self, request):
         """自动获取所有 A 股持仓的最新价格并更新，保存每日快照，并回补近期缺失"""
         from datetime import date as date_type, timedelta
-        from .stock_data import _symbol_to_secid, _request_with_proxy_fallback
-        import requests as std_requests
+        from .stock_data import _symbol_to_tencent
 
         today = date_type.today()
 
@@ -326,39 +325,28 @@ class InvestmentHoldingViewSet(viewsets.ModelViewSet):
             d += timedelta(days=1)
 
         if missing_dates:
-            # 批量获取 K 线数据回补
-            kline_url = 'https://push2his.eastmoney.com/api/qt/stock/kline/get'
-            kline_headers = {
-                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-                'Referer': 'https://quote.eastmoney.com/',
-            }
-            beg = lookback_start.strftime('%Y%m%d')
-            end_str = (today - timedelta(days=1)).strftime('%Y%m%d')
+            # 通过新浪财经获取历史 K 线数据回补
+            import json
+            import requests as std_requests
+            sina_url = 'https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData'
 
             kline_cache = {}
             for symbol in symbols:
-                secid = _symbol_to_secid(symbol)
-                if not secid:
+                tc = _symbol_to_tencent(symbol)
+                if not tc:
                     continue
-                resp = _request_with_proxy_fallback(
-                    std_requests.get, kline_url,
-                    params={
-                        'secid': secid,
-                        'fields1': 'f1,f2,f3,f4,f5,f6',
-                        'fields2': 'f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61',
-                        'klt': '101', 'fqt': '1',
-                        'beg': beg, 'end': end_str,
-                    },
-                    headers=kline_headers,
-                )
-                if resp:
-                    data = resp.json().get('data', {})
-                    for line in data.get('klines', []):
-                        parts = line.split(',')
-                        kline_cache.setdefault(symbol, {})[parts[0]] = {
-                            'close': Decimal(parts[2]),
-                            'pct_change': Decimal(parts[8]),
-                        }
+                try:
+                    resp = std_requests.get(sina_url, params={
+                        'symbol': tc, 'scale': '240', 'ma': 'no', 'datalen': '15',
+                    }, timeout=10)
+                    if resp.status_code == 200:
+                        for item in json.loads(resp.text):
+                            kline_cache.setdefault(symbol, {})[item['day']] = {
+                                'close': Decimal(item['close']),
+                                'pct_change': None,
+                            }
+                except Exception:
+                    pass
 
             for md in missing_dates:
                 md_str = md.isoformat()
@@ -386,7 +374,7 @@ class InvestmentHoldingViewSet(viewsets.ModelViewSet):
                     total_pl = market_value - cost_value
                     total_pl_pct = (total_pl / cost_value * 100) if cost_value > 0 else Decimal('0')
                     daily_pl = (close_price - prev_close) * holding.quantity
-                    daily_pl_pct = kline['pct_change']
+                    daily_pl_pct = ((close_price - prev_close) / prev_close * 100) if prev_close > 0 else Decimal('0')
 
                     DailyHoldingSnapshot.objects.update_or_create(
                         holding=holding, date=md,

@@ -1,7 +1,7 @@
 import os
 import logging
+import requests
 from curl_cffi import requests as cffi_requests
-import requests as std_requests
 
 logger = logging.getLogger(__name__)
 
@@ -12,11 +12,7 @@ SEARCH_PARAMS = {
     'count': '10',
 }
 
-KLINE_URL = 'https://push2his.eastmoney.com/api/qt/stock/kline/get'
-KLINE_HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-    'Referer': 'https://quote.eastmoney.com/',
-}
+TENCENT_QUOTE_URL = 'https://qt.gtimg.cn/q='
 
 
 def _classify_type(type_name):
@@ -61,8 +57,6 @@ def _search_eastmoney(keyword):
 def _search_akshare(code):
     """通过 AkShare 查询单只股票信息（fallback）"""
     try:
-        from .proxy_pool import setup_proxy_env, clear_proxy_env
-        setup_proxy_env()
         import akshare as ak
         info = ak.stock_individual_info_em(symbol=code)
         if not info.empty:
@@ -79,9 +73,6 @@ def _search_akshare(code):
                 }]
     except Exception as e:
         logger.warning(f'AkShare 查询失败: {e}')
-    finally:
-        from .proxy_pool import clear_proxy_env
-        clear_proxy_env()
     return []
 
 
@@ -100,140 +91,115 @@ def search_security(keyword):
     return []
 
 
-# ─── 实时行情获取 ────────────────────────────────────────────────
+# ─── 实时行情获取（腾讯财经 API） ─────────────────────────────────────
 
-def _symbol_to_secid(symbol):
-    """将 A 股代码转换为东方财富 secid 格式"""
+def _symbol_to_tencent(symbol):
+    """将 A 股代码转换为腾讯行情前缀格式"""
     if not symbol or not symbol.isdigit() or len(symbol) != 6:
         return None
     if symbol[0] == '6':
-        return f'1.{symbol}'  # 沪市
-    return f'0.{symbol}'      # 深市 / 北交所
+        return f'sh{symbol}'
+    return f'sz{symbol}'
 
 
-def _request_with_proxy_fallback(method, url, **kwargs):
+def _parse_tencent_quote(raw_text):
     """
-    直连优先，直连失败后尝试代理。
-    返回 Response 或 None。
+    解析腾讯行情返回数据。
+    字段: [1]名称 [3]最新价 [4]昨收 [32]涨跌额 [33]涨幅%
     """
-    from .proxy_pool import get_proxies_dict, _cache_lock, _proxy_cache
-
-    timeout = kwargs.pop('timeout', 10)
-
-    # 第一次尝试：直连
     try:
-        resp = method(url, timeout=timeout, **kwargs)
-        if resp.status_code == 200:
-            return resp
-    except Exception as e:
-        logger.warning(f'直连请求失败，尝试代理: {e}')
-
-    # 第二次尝试：使用代理
-    proxies = get_proxies_dict()
-    if proxies:
-        try:
-            resp = method(url, proxies=proxies, timeout=timeout, **kwargs)
-            if resp.status_code == 200:
-                return resp
-        except Exception as e:
-            logger.warning(f'代理请求也失败: {e}')
-            with _cache_lock:
-                _proxy_cache['proxy'] = None
-
-    return None
+        start = raw_text.index('"') + 1
+        end = raw_text.rindex('"')
+        parts = raw_text[start:end].split('~')
+        if len(parts) < 35:
+            return None
+        name = parts[1]
+        current_price = float(parts[3])
+        previous_close = float(parts[4])
+        if current_price <= 0:
+            return None
+        return {
+            'name': name,
+            'current_price': current_price,
+            'previous_close': previous_close,
+        }
+    except (ValueError, IndexError):
+        return None
 
 
 def fetch_latest_price(symbol):
     """
-    获取单只 A 股最新价格（通过东方财富 kline API）。
-    先尝试代理，失败后直连。
+    获取单只 A 股最新价格（通过腾讯财经 API）。
     返回 {'symbol', 'name', 'current_price', 'previous_close'} 或 None。
     """
-    secid = _symbol_to_secid(symbol)
-    if not secid:
+    tencent_code = _symbol_to_tencent(symbol)
+    if not tencent_code:
         return None
 
-    resp = _request_with_proxy_fallback(
-        std_requests.get,
-        KLINE_URL,
-        params={
-            'secid': secid,
-            'fields1': 'f1,f2,f3,f4,f5,f6',
-            'fields2': 'f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61',
-            'klt': '101',
-            'fqt': '1',
-            'end': '20500101',
-            'lmt': '1',
-        },
-        headers=KLINE_HEADERS,
-    )
-
-    if resp:
-        data = resp.json().get('data', {})
-        if data and data.get('klines'):
-            kline = data['klines'][-1].split(',')
-            current_price = float(kline[2])
-            previous_close = data.get('preKPrice')
-            if previous_close:
-                previous_close = float(previous_close)
-
-            return {
-                'symbol': data.get('code', symbol),
-                'name': data.get('name', ''),
-                'current_price': current_price,
-                'previous_close': previous_close,
-            }
-
-    logger.warning(f'获取 {symbol} 价格失败（代理和直连均不可用）')
-    return None
-
-
-def _fetch_price_akshare(symbol):
-    """通过 AkShare 获取股票价格（fallback）"""
     try:
-        from .proxy_pool import setup_proxy_env, clear_proxy_env
-        setup_proxy_env()
-        import akshare as ak
-        df = ak.stock_zh_a_spot_em()
-        row = df[df['代码'] == symbol]
-        if row.empty:
-            return None
-        row = row.iloc[0]
-        return {
-            'symbol': symbol,
-            'name': str(row.get('名称', '')),
-            'current_price': float(row['最新价']) if row['最新价'] else None,
-            'previous_close': float(row['昨收']) if row.get('昨收') else None,
-        }
+        resp = requests.get(
+            TENCENT_QUOTE_URL + tencent_code,
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            info = _parse_tencent_quote(resp.text)
+            if info:
+                return {
+                    'symbol': symbol,
+                    'name': info['name'],
+                    'current_price': info['current_price'],
+                    'previous_close': info['previous_close'],
+                }
     except Exception as e:
-        logger.warning(f'AkShare 获取 {symbol} 价格失败: {e}')
-        return None
-    finally:
-        from .proxy_pool import clear_proxy_env
-        clear_proxy_env()
+        logger.warning(f'请求失败: {e}')
+
+    logger.warning(f'获取 {symbol} 价格失败')
+    return None
 
 
 def fetch_batch_prices(symbols):
     """
-    批量获取股票最新价格（并发）。
+    批量获取股票最新价格。
+    腾讯 API 支持逗号分隔批量查询，单次最多约 50 只。
     返回 {symbol: {'current_price', 'previous_close', 'name'}} 字典。
     """
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
     result = {}
-    with ThreadPoolExecutor(max_workers=min(len(symbols), 5)) as executor:
-        futures = {executor.submit(fetch_latest_price, s): s for s in symbols}
-        for future in as_completed(futures, timeout=30):
-            symbol = futures[future]
-            try:
-                price_info = future.result()
-                if price_info and price_info.get('current_price'):
-                    result[symbol] = {
-                        'current_price': price_info['current_price'],
-                        'previous_close': price_info.get('previous_close'),
-                        'name': price_info.get('name', ''),
-                    }
-            except Exception:
-                pass
+    tencent_map = {}
+    for s in symbols:
+        tc = _symbol_to_tencent(s)
+        if tc:
+            tencent_map[tc] = s
+
+    if not tencent_map:
+        return result
+
+    codes = list(tencent_map.keys())
+    # 腾讯 API 支持逗号分隔批量查询
+    batch = ','.join(codes)
+
+    try:
+        resp = requests.get(TENCENT_QUOTE_URL + batch, timeout=15)
+        if resp.status_code != 200:
+            raise Exception(f'HTTP {resp.status_code}')
+
+        for line in resp.text.strip().split(';'):
+            line = line.strip()
+            if not line or '=' not in line:
+                continue
+            # 格式: v_sh600519="..."
+            key = line.split('=')[0].strip().replace('v_', '')
+            symbol = tencent_map.get(key)
+            if not symbol:
+                continue
+            info = _parse_tencent_quote(line)
+            if info and info['current_price']:
+                result[symbol] = {
+                    'current_price': info['current_price'],
+                    'previous_close': info['previous_close'],
+                    'name': info['name'],
+                }
+    except Exception as e:
+        logger.warning(f'批量获取价格失败: {e}')
+
     logger.info(f'批量获取价格完成: {len(result)}/{len(symbols)} 成功')
     return result

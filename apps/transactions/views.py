@@ -107,6 +107,31 @@ class TransactionViewSet(viewsets.ModelViewSet):
         account.save(update_fields=['balance'])
 
     @action(detail=False, methods=['get'])
+    def filter_summary(self, request):
+        """筛选汇总统计（总收入、总支出、总笔数）"""
+        queryset = self.get_queryset().exclude(account__exclude_from_reports=True)
+        transaction_type = request.query_params.get('transaction_type')
+        account = request.query_params.get('account')
+        category = request.query_params.get('category')
+        if transaction_type:
+            queryset = queryset.filter(transaction_type=transaction_type)
+        if account:
+            queryset = queryset.filter(account_id=account)
+        if category:
+            queryset = queryset.filter(category_id=category)
+        agg = queryset.aggregate(
+            income=Sum('amount', filter=Q(transaction_type='income'), default=0),
+            expense=Sum('amount', filter=Q(transaction_type='expense'), default=0),
+            count=Count('id'),
+        )
+        return Response({
+            'income': agg['income'],
+            'expense': agg['expense'],
+            'count': agg['count'],
+            'balance': agg['income'] - agg['expense'],
+        })
+
+    @action(detail=False, methods=['get'])
     def daily_summary(self, request):
         """按日汇总"""
         queryset = self.get_queryset().exclude(account__exclude_from_reports=True)

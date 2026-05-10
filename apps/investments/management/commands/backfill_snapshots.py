@@ -1,3 +1,4 @@
+import json
 import logging
 from datetime import date, timedelta
 from decimal import Decimal
@@ -9,47 +10,41 @@ from apps.investments.models import DailyHoldingSnapshot, InvestmentHolding
 
 logger = logging.getLogger(__name__)
 
-KLINE_URL = 'https://push2his.eastmoney.com/api/qt/stock/kline/get'
-KLINE_HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-    'Referer': 'https://quote.eastmoney.com/',
-}
+SINA_KLINE_URL = 'https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData'
 
 
-def _symbol_to_secid(symbol):
+def _symbol_to_sina(symbol):
     if not symbol or not symbol.isdigit() or len(symbol) != 6:
         return None
-    return f'1.{symbol}' if symbol[0] == '6' else f'0.{symbol}'
+    return f'sh{symbol}' if symbol[0] == '6' else f'sz{symbol}'
 
 
 def _fetch_klines(symbol, start_date, end_date):
-    secid = _symbol_to_secid(symbol)
-    if not secid:
+    """通过新浪财经获取历史 K 线数据"""
+    sina_code = _symbol_to_sina(symbol)
+    if not sina_code:
         return {}
-    params = {
-        'secid': secid,
-        'fields1': 'f1,f2,f3,f4,f5,f6',
-        'fields2': 'f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61',
-        'klt': '101',
-        'fqt': '1',
-        'beg': start_date.replace('-', ''),
-        'end': end_date.replace('-', ''),
-    }
+
+    start = date.fromisoformat(start_date)
+    end = date.fromisoformat(end_date)
+    days = (end - start).days + 5
     try:
-        resp = requests.get(KLINE_URL, params=params, headers=KLINE_HEADERS, timeout=10)
-        data = resp.json().get('data', {})
-        klines = data.get('klines', [])
+        resp = requests.get(SINA_KLINE_URL, params={
+            'symbol': sina_code, 'scale': '240', 'ma': 'no', 'datalen': str(days),
+        }, timeout=10)
+        if resp.status_code != 200:
+            return {}
+        items = json.loads(resp.text)
         result = {}
-        for k in klines:
-            parts = k.split(',')
-            # parts: date,open,close,high,low,volume,amount,amplitude,pct_change,amount_change,turnover
-            result[parts[0]] = {
-                'open': Decimal(parts[1]),
-                'close': Decimal(parts[2]),
-                'high': Decimal(parts[3]),
-                'low': Decimal(parts[4]),
-                'pct_change': Decimal(parts[8]),
-            }
+        for item in items:
+            day = item['day']
+            if start_date <= day <= end_date:
+                result[day] = {
+                    'open': Decimal(item['open']),
+                    'close': Decimal(item['close']),
+                    'high': Decimal(item['high']),
+                    'low': Decimal(item['low']),
+                }
         return result
     except Exception as e:
         logger.error(f'获取 {symbol} K线失败: {e}')
@@ -82,12 +77,10 @@ class Command(BaseCommand):
         symbols = list(set(h.symbol for h in stock_holdings))
         self.stdout.write(f'持仓代码: {symbols}')
 
-        # Fetch klines for the full range (include day before start for previous_close)
         kline_cache = {}
-        prev_start = (date.fromisoformat(start) - timedelta(days=5)).isoformat()
         for symbol in symbols:
-            self.stdout.write(f'获取 {symbol} K线 ({prev_start} ~ {end})...')
-            kline_cache[symbol] = _fetch_klines(symbol, prev_start, end)
+            self.stdout.write(f'获取 {symbol} K线 ({start} ~ {end})...')
+            kline_cache[symbol] = _fetch_klines(symbol, start, end)
 
         # Get sorted trading dates in range
         all_dates = set()
@@ -110,7 +103,6 @@ class Command(BaseCommand):
                 if not kline:
                     continue
 
-                # previous_close: look for the trading day before
                 prev_dates = [d for d in sorted(klines.keys()) if d < td]
                 prev_close = klines[prev_dates[-1]]['close'] if prev_dates else kline['open']
 
@@ -120,7 +112,7 @@ class Command(BaseCommand):
                 total_pl = market_value - cost_value
                 total_pl_pct = (total_pl / cost_value * 100) if cost_value > 0 else Decimal('0')
                 daily_pl = (close_price - prev_close) * holding.quantity
-                daily_pl_pct = kline['pct_change']
+                daily_pl_pct = ((close_price - prev_close) / prev_close * 100) if prev_close > 0 else Decimal('0')
 
                 if dry_run:
                     self.stdout.write(
@@ -142,7 +134,7 @@ class Command(BaseCommand):
                         cost_value=cost_value.quantize(Decimal('0.01')),
                         daily_pl=daily_pl.quantize(Decimal('0.01')),
                         total_pl=total_pl.quantize(Decimal('0.01')),
-                        daily_pl_pct=daily_pl_pct.quantize(Decimal('0.01')) if isinstance(daily_pl_pct, Decimal) else Decimal(str(daily_pl_pct)).quantize(Decimal('0.01')),
+                        daily_pl_pct=daily_pl_pct.quantize(Decimal('0.01')),
                         total_pl_pct=total_pl_pct.quantize(Decimal('0.01')),
                     )
                 created += 1
