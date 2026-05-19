@@ -195,6 +195,29 @@ class NetWorthHistoryTests(BaseTestCase):
         self.assertEqual(current['month'], date.today().strftime('%Y-%m'))
         self.assertGreaterEqual(current['assets'], 5000)
 
+    def test_months_invalid_falls_back_to_12(self):
+        """Non-integer months param falls back to 12 without error."""
+        resp = self.client.get(self.url, {'months': 'abc'})
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertGreaterEqual(len(data['history']), 12)
+
+    def test_months_clamped(self):
+        """Months is clamped to [1, 120] range."""
+        resp = self.client.get(self.url, {'months': 0})
+        self.assertEqual(resp.status_code, 200)
+
+        resp = self.client.get(self.url, {'months': 999})
+        self.assertEqual(resp.status_code, 200)
+
+    def test_net_worth_history_liabilities_not_negative(self):
+        """Historical liabilities should never be negative."""
+        self.create_account(name='Savings', balance=10000, account_type='bank')
+        resp = self.client.get(self.url, {'months': 6})
+        self.assertEqual(resp.status_code, 200)
+        for entry in resp.json()['history']:
+            self.assertGreaterEqual(entry['liabilities'], 0)
+
 
 class ExportExcelTests(BaseTestCase):
     """Tests for GET /api/reports/export/"""

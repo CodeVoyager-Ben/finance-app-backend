@@ -244,9 +244,18 @@ class InvestmentHoldingViewSet(viewsets.ModelViewSet):
     def auto_update_prices(self, request):
         """自动获取所有 A 股持仓的最新价格并更新，保存每日快照，并回补近期缺失"""
         from datetime import date as date_type, timedelta
+        from django.utils import timezone as tz_utils
         from .stock_data import _symbol_to_tencent
+        from .management.commands.update_stock_prices import is_trading_day
 
         today = date_type.today()
+        now_shanghai = tz_utils.localtime(tz_utils.now())
+
+        # 仅在交易日收盘后（15:05 CST）才创建今日快照
+        can_create_today_snapshot = (
+            is_trading_day(today)
+            and (now_shanghai.hour > 15 or (now_shanghai.hour == 15 and now_shanghai.minute >= 5))
+        )
 
         holdings = self.get_queryset().filter(
             quantity__gt=0,
@@ -273,35 +282,39 @@ class InvestmentHoldingViewSet(viewsets.ModelViewSet):
                 new_price = Decimal(str(price_info['current_price']))
                 new_prev = Decimal(str(price_info.get('previous_close') or holding.current_price))
 
-                daily_pl = (new_price - new_prev) * holding.quantity
-                daily_pl_pct = ((new_price - new_prev) / new_prev * 100) if new_prev > 0 else Decimal('0')
-                market_value = new_price * holding.quantity
-                cost_value = holding.avg_cost * holding.quantity
-                total_pl = market_value - cost_value
-                total_pl_pct = (total_pl / cost_value * 100) if cost_value > 0 else Decimal('0')
-
-                DailyHoldingSnapshot.objects.update_or_create(
-                    holding=holding, date=today,
-                    defaults={
-                        'user': request.user,
-                        'symbol': holding.symbol,
-                        'name': holding.name,
-                        'quantity': holding.quantity,
-                        'avg_cost': holding.avg_cost,
-                        'close_price': new_price,
-                        'previous_close': new_prev,
-                        'market_value': market_value.quantize(Decimal('0.01')),
-                        'cost_value': cost_value.quantize(Decimal('0.01')),
-                        'daily_pl': daily_pl.quantize(Decimal('0.01')),
-                        'total_pl': total_pl.quantize(Decimal('0.01')),
-                        'daily_pl_pct': daily_pl_pct.quantize(Decimal('0.01')),
-                        'total_pl_pct': total_pl_pct.quantize(Decimal('0.01')),
-                    },
-                )
-
+                # 始终更新持仓价格（供 UI 展示）
                 holding.previous_close_price = new_prev
                 holding.current_price = new_price
                 holding.save(update_fields=['previous_close_price', 'current_price', 'updated_at'])
+
+                # 仅交易日收盘后创建今日快照
+                if can_create_today_snapshot:
+                    daily_pl = (new_price - new_prev) * holding.quantity
+                    daily_pl_pct = ((new_price - new_prev) / new_prev * 100) if new_prev > 0 else Decimal('0')
+                    market_value = new_price * holding.quantity
+                    cost_value = holding.avg_cost * holding.quantity
+                    total_pl = market_value - cost_value
+                    total_pl_pct = (total_pl / cost_value * 100) if cost_value > 0 else Decimal('0')
+
+                    DailyHoldingSnapshot.objects.update_or_create(
+                        holding=holding, date=today,
+                        defaults={
+                            'user': request.user,
+                            'symbol': holding.symbol,
+                            'name': holding.name,
+                            'quantity': holding.quantity,
+                            'avg_cost': holding.avg_cost,
+                            'close_price': new_price,
+                            'previous_close': new_prev,
+                            'market_value': market_value.quantize(Decimal('0.01')),
+                            'cost_value': cost_value.quantize(Decimal('0.01')),
+                            'daily_pl': daily_pl.quantize(Decimal('0.01')),
+                            'total_pl': total_pl.quantize(Decimal('0.01')),
+                            'daily_pl_pct': daily_pl_pct.quantize(Decimal('0.01')),
+                            'total_pl_pct': total_pl_pct.quantize(Decimal('0.01')),
+                        },
+                    )
+
                 updated_count += 1
             else:
                 failed_symbols.append(holding.symbol)
@@ -400,6 +413,8 @@ class InvestmentHoldingViewSet(viewsets.ModelViewSet):
         detail = f'成功更新 {updated_count} 个持仓价格'
         if backfilled:
             detail += f'，回补 {backfilled} 条历史快照'
+        if not can_create_today_snapshot and updated_count > 0:
+            detail += '（今日快照将在收盘后自动生成）'
 
         return Response({
             'detail': detail,

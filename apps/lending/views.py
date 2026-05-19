@@ -42,6 +42,13 @@ class LendingRecordViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
 
+    def perform_destroy(self, instance):
+        with db_transaction.atomic():
+            # 先回退所有还款的账户余额
+            for repayment in instance.repayments.select_related('account').all():
+                _update_account_for_repayment(repayment, revert=True)
+            instance.delete()
+
     def perform_update(self, serializer):
         instance = serializer.instance
         if instance.repayments.exists():
@@ -50,6 +57,16 @@ class LendingRecordViewSet(viewsets.ModelViewSet):
             if 'record_type' in serializer.validated_data:
                 raise ValidationError('已有还款记录的借贷类型不可修改')
         serializer.save()
+
+    @action(detail=True, methods=['post'], url_path='write-off')
+    def write_off(self, request, pk=None):
+        """核销借贷记录"""
+        record = self.get_object()
+        if record.status in ('settled', 'written_off'):
+            raise ValidationError('该记录已结清或已核销')
+        record.status = 'written_off'
+        record.save(update_fields=['status', 'updated_at'])
+        return Response(LendingRecordSerializer(record).data)
 
     @action(detail=False, methods=['get'])
     def summary(self, request):

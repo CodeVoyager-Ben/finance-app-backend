@@ -121,6 +121,26 @@ class ProfileTests(BaseTestCase):
         self.user.refresh_from_db()
         self.assertEqual(self.user.email, 'updated@example.com')
 
+    def test_username_read_only(self):
+        """用户名不可通过 profile API 修改"""
+        data = {'username': 'hacked'}
+        response = self.client.patch(PROFILE_URL, data)
+        self.assertEqual(response.status_code, 200)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.username, 'testuser')
+
+    def test_email_duplicate_rejected(self):
+        """更新邮箱为已被其他用户使用的邮箱应失败"""
+        data = {'email': 'test2@example.com'}
+        response = self.client.patch(PROFILE_URL, data)
+        self.assertEqual(response.status_code, 400)
+
+    def test_email_keep_own(self):
+        """更新其他字段时保留自己的邮箱不报错"""
+        data = {'phone': '13800138000', 'email': 'test@example.com'}
+        response = self.client.patch(PROFILE_URL, data)
+        self.assertEqual(response.status_code, 200)
+
 
 class ChangePasswordTests(BaseTestCase):
     """修改密码相关测试"""

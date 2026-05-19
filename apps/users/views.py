@@ -14,41 +14,27 @@ User = get_user_model()
 
 def init_default_data(user):
     """为新用户创建预置分类和默认账户"""
-    # 支出分类 — 先批量创建父分类
-    expense_parents = []
-    expense_children = []
+    all_children = []
     for i, (name, icon, color, children) in enumerate(EXPENSE_CATEGORIES):
-        parent = Category(user=user, name=name, category_type='expense',
-                          icon=icon, color=color, sort_order=i)
-        expense_parents.append(parent)
-
-    saved_parents = Category.objects.bulk_create(expense_parents)
-    for parent, (_, _, _, children) in zip(saved_parents, EXPENSE_CATEGORIES):
+        parent = Category.objects.create(user=user, name=name, category_type='expense',
+                                         icon=icon, color=color, sort_order=i)
         for j, (child_name, child_icon) in enumerate(children):
-            expense_children.append(
+            all_children.append(
                 Category(user=user, name=child_name, category_type='expense',
                          parent=parent, icon=child_icon, sort_order=j)
             )
 
-    # 收入分类
-    income_parents = []
-    income_children = []
     for i, (name, icon, color, children) in enumerate(INCOME_CATEGORIES):
-        parent = Category(user=user, name=name, category_type='income',
-                          icon=icon, color=color, sort_order=i)
-        income_parents.append(parent)
-
-    saved_income_parents = Category.objects.bulk_create(income_parents)
-    for parent, (_, _, _, children) in zip(saved_income_parents, INCOME_CATEGORIES):
+        parent = Category.objects.create(user=user, name=name, category_type='income',
+                                         icon=icon, color=color, sort_order=i)
         for j, (child_name, child_icon) in enumerate(children):
-            income_children.append(
+            all_children.append(
                 Category(user=user, name=child_name, category_type='income',
                          parent=parent, icon=child_icon, sort_order=j)
             )
 
-    Category.objects.bulk_create(expense_children + income_children)
+    Category.objects.bulk_create(all_children)
 
-    # 默认账户
     Account.objects.bulk_create([
         Account(user=user, name='现金', account_type='cash', icon='💵', color='#52c41a'),
         Account(user=user, name='微信钱包', account_type='wechat', icon='💚', color='#07c160'),

@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from rest_framework import serializers
 from .models import LendingRecord, Repayment
 
@@ -30,9 +32,26 @@ class RepaymentCreateSerializer(serializers.ModelSerializer):
         record = data['lending_record']
         if record.user != self.context['request'].user:
             raise serializers.ValidationError('无权操作此记录')
-        from decimal import Decimal
+
+        # repay_type 必须与 record_type 匹配
+        repay_type = data.get('repay_type')
+        if record.record_type == 'lend' and repay_type != 'collect':
+            raise serializers.ValidationError({'repay_type': '借出记录的还款类型应为收款(collect)'})
+        if record.record_type == 'borrow' and repay_type != 'repay':
+            raise serializers.ValidationError({'repay_type': '借入记录的还款类型应为还款(repay)'})
+
+        # 已结清/已核销不允许还款
+        if record.status in ('settled', 'written_off'):
+            raise serializers.ValidationError('该借贷记录已结清或已核销，无法录入还款')
+
+        # 利息不能超过总额
+        interest = data.get('interest', 0) or 0
+        if Decimal(str(interest)) > Decimal(str(data['amount'])):
+            raise serializers.ValidationError({'interest': '利息不能超过还款总额'})
+
+        # 基本校验（最终校验在 perform_create 的锁内执行）
         remaining = record.remaining_amount
-        principal = Decimal(str(data['amount'])) - Decimal(str(data.get('interest', 0) or 0))
+        principal = Decimal(str(data['amount'])) - Decimal(str(interest))
         if principal > remaining:
             raise serializers.ValidationError(f'还款本金超出剩余金额 ¥{remaining:.2f}')
         return data

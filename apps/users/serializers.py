@@ -9,7 +9,12 @@ class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = ['id', 'username', 'email', 'phone', 'avatar', 'currency', 'date_joined']
-        read_only_fields = ['id', 'date_joined']
+        read_only_fields = ['id', 'username', 'date_joined']
+
+    def validate_email(self, value):
+        if value and User.objects.filter(email=value).exclude(pk=self.instance.pk if self.instance else None).exists():
+            raise serializers.ValidationError('该邮箱已被注册')
+        return value
 
 
 def validate_password_strength(password):

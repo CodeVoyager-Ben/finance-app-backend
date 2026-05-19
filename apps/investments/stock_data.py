@@ -93,6 +93,7 @@ def search_security(keyword):
 
 # ─── 实时行情获取（腾讯财经 API） ─────────────────────────────────────
 
+
 def _symbol_to_tencent(symbol):
     """将 A 股代码转换为腾讯行情前缀格式"""
     if not symbol or not symbol.isdigit() or len(symbol) != 6:
@@ -125,36 +126,6 @@ def _parse_tencent_quote(raw_text):
         }
     except (ValueError, IndexError):
         return None
-
-
-def fetch_latest_price(symbol):
-    """
-    获取单只 A 股最新价格（通过腾讯财经 API）。
-    返回 {'symbol', 'name', 'current_price', 'previous_close'} 或 None。
-    """
-    tencent_code = _symbol_to_tencent(symbol)
-    if not tencent_code:
-        return None
-
-    try:
-        resp = requests.get(
-            TENCENT_QUOTE_URL + tencent_code,
-            timeout=10,
-        )
-        if resp.status_code == 200:
-            info = _parse_tencent_quote(resp.text)
-            if info:
-                return {
-                    'symbol': symbol,
-                    'name': info['name'],
-                    'current_price': info['current_price'],
-                    'previous_close': info['previous_close'],
-                }
-    except Exception as e:
-        logger.warning(f'请求失败: {e}')
-
-    logger.warning(f'获取 {symbol} 价格失败')
-    return None
 
 
 def fetch_batch_prices(symbols):

@@ -82,11 +82,15 @@ class Command(BaseCommand):
             self.stdout.write(f'获取 {symbol} K线 ({start} ~ {end})...')
             kline_cache[symbol] = _fetch_klines(symbol, start, end)
 
-        # Get sorted trading dates in range
+        # Get sorted trading dates in range (filter non-trading days)
+        from apps.investments.management.commands.update_stock_prices import is_trading_day
         all_dates = set()
         for klines in kline_cache.values():
             all_dates.update(klines.keys())
-        trading_dates = sorted(d for d in all_dates if start <= d <= end)
+        trading_dates = sorted(
+            d for d in all_dates
+            if start <= d <= end and is_trading_day(date.fromisoformat(d))
+        )
 
         created = 0
         skipped = 0

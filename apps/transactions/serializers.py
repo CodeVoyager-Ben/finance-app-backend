@@ -9,6 +9,13 @@ class AccountSerializer(serializers.ModelSerializer):
         fields = ['id', 'name', 'account_type', 'balance', 'icon', 'color', 'is_active', 'exclude_from_reports', 'created_at']
         read_only_fields = ['id', 'created_at']
 
+    def get_fields(self):
+        fields = super().get_fields()
+        # 编辑时 balance 只读，创建时可设置初始余额
+        if self.instance and getattr(self.instance, 'pk', None):
+            fields['balance'].read_only = True
+        return fields
+
 
 
 class CategorySerializer(serializers.ModelSerializer):
@@ -59,6 +66,7 @@ class TransactionCreateSerializer(serializers.ModelSerializer):
         account = data.get('account')
         to_account = data.get('to_account')
         transaction_type = data.get('transaction_type')
+        category = data.get('category')
 
         if account and account.user != user:
             raise serializers.ValidationError({'account': '无权操作此账户'})
@@ -69,6 +77,9 @@ class TransactionCreateSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({'to_account': '转账必须指定目标账户'})
             if account and to_account and account.id == to_account.id:
                 raise serializers.ValidationError({'to_account': '转出和转入账户不能相同'})
+        if category and transaction_type and transaction_type != 'transfer':
+            if category.category_type != transaction_type:
+                raise serializers.ValidationError({'category': f'分类类型({category.category_type})与交易类型({transaction_type})不匹配'})
         return data
 
 

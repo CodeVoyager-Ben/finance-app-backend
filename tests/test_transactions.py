@@ -245,12 +245,14 @@ class TransactionSummaryTests(BaseTestCase):
         self.cat_income = self.create_category(name='工资', category_type='income')
 
     def _create_transactions(self):
-        """Helper: create a handful of transactions in April 2026."""
+        """Helper: create a handful of transactions in the current month."""
+        from datetime import date
+        today = date.today()
         self.client.post('/api/transactions/', {
             'account': self.acc1.id,
             'transaction_type': 'income',
             'amount': 500,
-            'date': '2026-04-10',
+            'date': str(today.replace(day=10)),
             'category': self.cat_income.id,
             'note': '工资',
         }, format='json')
@@ -258,7 +260,7 @@ class TransactionSummaryTests(BaseTestCase):
             'account': self.acc1.id,
             'transaction_type': 'expense',
             'amount': 100,
-            'date': '2026-04-10',
+            'date': str(today.replace(day=10)),
             'category': self.cat_expense.id,
             'note': '早餐午餐',
         }, format='json')
@@ -266,7 +268,7 @@ class TransactionSummaryTests(BaseTestCase):
             'account': self.acc1.id,
             'transaction_type': 'expense',
             'amount': 200,
-            'date': '2026-04-15',
+            'date': str(today.replace(day=15)),
             'category': self.cat_expense.id,
             'note': '晚餐',
         }, format='json')
@@ -276,67 +278,71 @@ class TransactionSummaryTests(BaseTestCase):
     # ------------------------------------------------------------------
     def test_daily_summary(self):
         """GET daily_summary returns per-date aggregation for the given month."""
+        from datetime import date
+        today = date.today()
         self._create_transactions()
 
         resp = self.client.get('/api/transactions/daily_summary/', {
-            'year': 2026, 'month': 4,
+            'year': today.year, 'month': today.month,
         })
         self.assertEqual(resp.status_code, 200)
         data = resp.data
 
-        # There should be two date entries: 2026-04-10 and 2026-04-15
+        d10 = str(today.replace(day=10))
+        d15 = str(today.replace(day=15))
         dates = {row['date'] for row in data}
-        self.assertIn('2026-04-10', dates)
-        self.assertIn('2026-04-15', dates)
+        self.assertIn(d10, dates)
+        self.assertIn(d15, dates)
 
-        # Verify 2026-04-10: income=500, expense=100
-        apr10 = next(r for r in data if r['date'] == '2026-04-10')
-        self.assertEqual(Decimal(apr10['income']), Decimal('500'))
-        self.assertEqual(Decimal(apr10['expense']), Decimal('100'))
+        row10 = next(r for r in data if r['date'] == d10)
+        self.assertEqual(Decimal(row10['income']), Decimal('500'))
+        self.assertEqual(Decimal(row10['expense']), Decimal('100'))
 
-        # Verify 2026-04-15: income=0, expense=200
-        apr15 = next(r for r in data if r['date'] == '2026-04-15')
-        self.assertEqual(Decimal(apr15['income']), Decimal('0'))
-        self.assertEqual(Decimal(apr15['expense']), Decimal('200'))
+        row15 = next(r for r in data if r['date'] == d15)
+        self.assertEqual(Decimal(row15['income']), Decimal('0'))
+        self.assertEqual(Decimal(row15['expense']), Decimal('200'))
 
     # ------------------------------------------------------------------
     # 9. Monthly summary
     # ------------------------------------------------------------------
     def test_monthly_summary(self):
         """GET monthly_summary returns per-month aggregation for the given year."""
+        from datetime import date
+        today = date.today()
         self._create_transactions()
 
         resp = self.client.get('/api/transactions/monthly_summary/', {
-            'year': 2026,
+            'year': today.year,
         })
         self.assertEqual(resp.status_code, 200)
         data = resp.data
 
-        # Should have at least the April 2026 entry
+        month_key = today.strftime('%Y-%m')
         months = {row['month'] for row in data}
-        self.assertIn('2026-04', months)
+        self.assertIn(month_key, months)
 
-        apr = next(r for r in data if r['month'] == '2026-04')
-        self.assertEqual(Decimal(apr['income']), Decimal('500'))
-        self.assertEqual(Decimal(apr['expense']), Decimal('300'))
-        self.assertEqual(Decimal(apr['balance']), Decimal('200'))
+        month = next(r for r in data if r['month'] == month_key)
+        self.assertEqual(Decimal(month['income']), Decimal('500'))
+        self.assertEqual(Decimal(month['expense']), Decimal('300'))
+        self.assertEqual(Decimal(month['balance']), Decimal('200'))
 
     # ------------------------------------------------------------------
     # 10. Category summary
     # ------------------------------------------------------------------
     def test_category_summary(self):
         """GET category_summary returns per-category totals for expenses."""
+        from datetime import date
+        today = date.today()
         self._create_transactions()
 
         resp = self.client.get('/api/transactions/category_summary/', {
             'transaction_type': 'expense',
-            'year': 2026,
-            'month': 4,
+            'year': today.year,
+            'month': today.month,
         })
         self.assertEqual(resp.status_code, 200)
         data = resp.data
 
-        # All entries are expense type; '餐饮' total = 100 + 200 = 300
         self.assertTrue(len(data) >= 1)
         cat = next(r for r in data if r['category_name'] == '餐饮')
         self.assertEqual(Decimal(cat['total']), Decimal('300'))

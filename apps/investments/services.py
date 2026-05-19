@@ -20,7 +20,7 @@ def to_cny(amount, currency, target_date=None):
     ).order_by('-rate_date').first()
 
     if rate_obj is None:
-        return amount
+        return Decimal('0')
 
     return amount * rate_obj.rate
 
@@ -111,10 +111,11 @@ def update_holding_from_transaction(transaction):
         holding.avg_cost = holding.avg_cost / transaction.quantity
 
     holding.save()
+    _update_account_balance(transaction)
 
 
 def _update_account_balance(transaction):
-    """根据入金/出金/费用更新账户余额（使用 F() 避免竞态）"""
+    """根据交易类型更新账户余额（使用 F() 避免竞态）"""
     account = transaction.investment_account.__class__.objects.select_for_update().get(
         pk=transaction.investment_account.pk
     )
@@ -124,6 +125,10 @@ def _update_account_balance(transaction):
         account.balance = F('balance') - transaction.amount
     elif transaction.transaction_type == 'fee':
         account.balance = F('balance') - transaction.amount
+    elif transaction.transaction_type == 'buy':
+        account.balance = F('balance') - (transaction.amount + transaction.fee)
+    elif transaction.transaction_type == 'sell':
+        account.balance = F('balance') + (transaction.amount - transaction.fee)
     else:
         return
     account.save(update_fields=['balance'])
@@ -197,13 +202,7 @@ def handle_dividend(dividend_record):
         dividend_record.transaction = txn_div
         dividend_record.save(update_fields=['transaction'])
 
-        # 分红到账：增加账户余额
-        account = dividend_record.investment_account.__class__.objects.select_for_update().get(
-            pk=dividend_record.investment_account.pk
-        )
-        account.balance = F('balance') + dividend_record.net_amount
-        account.save(update_fields=['balance'])
-
+        # 再投资：分红直接转为股票，不改变账户余额
         # 更新持仓（分红再投资模式）
         update_holding_from_transaction(txn_buy)
 

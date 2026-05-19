@@ -75,18 +75,33 @@ class InvestmentAccountSerializer(serializers.ModelSerializer):
             fields['balance'].read_only = True
         return fields
 
+    def _calc_holding_totals(self, obj):
+        """一次遍历计算所有持仓汇总值"""
+        cache = self.context.get('_holding_totals_cache', {})
+        if obj.id not in cache:
+            market_value = Decimal('0')
+            holdings_cost = Decimal('0')
+            for h in obj.holdings.all():
+                market_value += h.market_value
+                holdings_cost += h.cost_value
+            cache[obj.id] = {
+                'market_value': market_value,
+                'holdings_cost': holdings_cost,
+            }
+            self.context['_holding_totals_cache'] = cache
+        return cache[obj.id]
+
     def get_total_market_value(self, obj):
-        return sum(h.market_value for h in obj.holdings.all())
+        return self._calc_holding_totals(obj)['market_value']
 
     def get_total_market_value_cny(self, obj):
-        total = self.get_total_market_value(obj)
-        return to_cny(total, obj.currency)
+        return to_cny(self.get_total_market_value(obj), obj.currency)
 
     def get_total_assets(self, obj):
         return obj.balance + self.get_total_market_value(obj)
 
     def get_total_holdings_cost(self, obj):
-        return sum(h.cost_value for h in obj.holdings.all())
+        return self._calc_holding_totals(obj)['holdings_cost']
 
     def get_account_total_return(self, obj):
         return self.get_total_assets(obj) - obj.initial_investment

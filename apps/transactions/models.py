@@ -109,6 +109,7 @@ class Budget(models.Model):
         verbose_name = '预算'
         verbose_name_plural = verbose_name
         ordering = ['-period', 'category']
+        unique_together = [['user', 'category', 'period', 'year', 'month']]
 
     def __str__(self):
         name = self.category.name if self.category else '总预算'

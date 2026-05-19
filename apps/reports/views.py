@@ -14,9 +14,9 @@ import calendar
 from dateutil.relativedelta import relativedelta
 
 from apps.transactions.models import Account, Category, Transaction
-from apps.investments.models import InvestmentAccount, InvestmentHolding
+from apps.investments.models import InvestmentAccount, InvestmentHolding, DailyHoldingSnapshot
 from apps.investments.services import to_cny
-from apps.lending.models import LendingRecord
+from apps.lending.models import LendingRecord, Repayment
 
 
 class BalanceSheetView(APIView):
@@ -74,19 +74,37 @@ class BalanceSheetView(APIView):
         total_invest = 0
         by_asset_category = {}
 
+        is_historical = target_date < date.today()
+
         for h in holdings:
-            mv_cny = float(to_cny(h.market_value, h.effective_currency))
+            if is_historical:
+                # 历史日期：使用最近一次快照
+                snapshot = DailyHoldingSnapshot.objects.filter(
+                    holding=h, date__lte=target_date
+                ).order_by('-date').first()
+                if not snapshot:
+                    continue
+                market_value = snapshot.market_value
+                cost_value = snapshot.cost_value
+                currency = h.effective_currency
+                mv_cny = float(to_cny(market_value, currency, target_date=target_date))
+            else:
+                market_value = h.market_value
+                cost_value = h.cost_value
+                currency = h.effective_currency
+                mv_cny = float(to_cny(market_value, currency))
+
             if mv_cny > 0:
                 at = h.investment_account.asset_type
                 type_name = at.name if at else '其他'
                 invest_assets.append({
                     'name': f'{h.name}({h.symbol})',
                     'type': type_name,
-                    'currency': h.effective_currency,
-                    'market_value': float(h.market_value),
+                    'currency': currency,
+                    'market_value': float(market_value),
                     'market_value_cny': mv_cny,
-                    'cost_value': float(h.cost_value),
-                    'profit_loss': float(h.profit_loss),
+                    'cost_value': float(cost_value),
+                    'profit_loss': float(market_value - cost_value),
                 })
                 total_invest += mv_cny
 
@@ -108,7 +126,14 @@ class BalanceSheetView(APIView):
         )
         receivables_map = {}
         for r in lend_records:
-            remaining = float(r.remaining_amount)
+            if is_historical:
+                # 历史日期：只计算到目标日期为止的还款
+                repaid = Repayment.objects.filter(
+                    lending_record=r, date__lte=target_date
+                ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
+                remaining = float(max(r.amount - repaid, Decimal('0')))
+            else:
+                remaining = float(r.remaining_amount)
             if remaining > 0:
                 key = r.counterparty
                 if key not in receivables_map:
@@ -168,7 +193,13 @@ class BalanceSheetView(APIView):
         )
         payables_map = {}
         for r in borrow_records:
-            remaining = float(r.remaining_amount)
+            if is_historical:
+                repaid = Repayment.objects.filter(
+                    lending_record=r, date__lte=target_date
+                ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
+                remaining = float(max(r.amount - repaid, Decimal('0')))
+            else:
+                remaining = float(r.remaining_amount)
             if remaining > 0:
                 key = r.counterparty
                 if key not in payables_map:
@@ -291,7 +322,11 @@ class NetWorthHistoryView(APIView):
 
     def get(self, request):
         user = request.user
-        months = int(request.query_params.get('months', 12))
+        try:
+            months = int(request.query_params.get('months', 12))
+        except (ValueError, TypeError):
+            months = 12
+        months = max(1, min(months, 120))
 
         # 当前净资产
         accounts = Account.objects.filter(user=user, is_active=True, exclude_from_reports=False)
@@ -326,6 +361,20 @@ class NetWorthHistoryView(APIView):
         # 获取过去N个月的所有交易，按月分组
         start_date = date.today() - relativedelta(months=months)
 
+        # 预查询月度投资快照总值
+        snapshots = DailyHoldingSnapshot.objects.filter(
+            user=user, date__gte=start_date
+        ).annotate(
+            month=TruncMonth('date')
+        ).values('month').annotate(
+            total_mv=Sum('market_value'),
+        ).order_by('month')
+
+        invest_by_month = {}
+        for s in snapshots:
+            mk = s['month'].strftime('%Y-%m')
+            invest_by_month[mk] = float(s['total_mv'] or 0)
+
         monthly_tx = Transaction.objects.filter(
             user=user, date__gte=start_date
         ).exclude(account__exclude_from_reports=True).annotate(
@@ -350,10 +399,13 @@ class NetWorthHistoryView(APIView):
 
         current_month_key = today.strftime('%Y-%m')
 
+        # 计算当前净正资产和净负债（不含投资/借贷）
+        current_positive_cash = sum(float(a.balance) for a in accounts if a.balance > 0)
+        current_negative_cash = sum(abs(float(a.balance)) for a in accounts if a.balance < 0)
+
         for i in range(months):
             # 从最远月份开始计算
             past = today - relativedelta(months=months - i)
-            # 规范化到月初
             month_date = past.replace(day=1)
             month_key = month_date.strftime('%Y-%m')
 
@@ -367,16 +419,23 @@ class NetWorthHistoryView(APIView):
                 if mk >= month_key:
                     net_change += nv
 
-            assets_at_month = current_total_assets - (cumulative_future - net_change)
-            liabilities_at_month = current_liabilities  # 简化：负债按当前值
+            # 分别计算正余额和负余额账户的历史值
+            positive_at_month = current_positive_cash - (cumulative_future - net_change)
+            negative_at_month = current_negative_cash  # 负余额账户暂按当前值
+            # 负债也按交易净变动同比例回退
+            if current_negative_cash > 0 and current_positive_cash > 0:
+                total_cash = current_positive_cash + current_negative_cash
+                negative_at_month = current_negative_cash - (cumulative_future - net_change) * (current_negative_cash / total_cash)
+                negative_at_month = max(0, negative_at_month)
 
-            # 更精确的负债：也要扣除未来变动中影响负余额账户的部分
-            # 简化处理：负债按比例调整
-            if current_total_assets > 0:
-                liability_ratio = current_liabilities / current_total_assets
-                liabilities_at_month = max(0, assets_at_month * liability_ratio)
+            # 投资：优先使用快照数据，无快照则用当前值
+            snapshot_invest = invest_by_month.get(month_key)
+            if snapshot_invest is not None:
+                invest_at_month = snapshot_invest + lend_remaining
             else:
-                liabilities_at_month = 0
+                invest_at_month = current_invest_balance + current_invest_holdings + lend_remaining
+            assets_at_month = max(0, positive_at_month) + invest_at_month
+            liabilities_at_month = negative_at_month + borrow_remaining
 
             cumulative_future += tx_by_month.get(month_key, 0)
 
@@ -421,7 +480,7 @@ class ExportExcelView(APIView):
         ws.title = '收支明细'
 
         # Headers
-        headers = ['日期', '类型', '分类', '账户', '金额', '备注']
+        headers = ['日期', '类型', '分类', '账户', '目标账户', '金额', '备注']
         header_fill = PatternFill(start_color='1677FF', end_color='1677FF', fill_type='solid')
         header_font = Font(color='FFFFFF', bold=True, size=12)
         thin_border = Border(
@@ -439,7 +498,7 @@ class ExportExcelView(APIView):
             cell.border = thin_border
 
         # Data
-        transactions = Transaction.objects.filter(user=user).exclude(account__exclude_from_reports=True).select_related('account', 'category').order_by('date')
+        transactions = Transaction.objects.filter(user=user).exclude(account__exclude_from_reports=True).select_related('account', 'category', 'to_account').order_by('date')
         if start_date:
             transactions = transactions.filter(date__gte=start_date)
         if end_date:
@@ -451,13 +510,14 @@ class ExportExcelView(APIView):
                 t.get_transaction_type_display(),
                 t.category.name if t.category else '',
                 t.account.name,
+                t.to_account.name if t.to_account else '',
                 float(t.amount),
                 t.note,
             ]
             for col, value in enumerate(data, 1):
                 cell = ws.cell(row=row, column=col, value=value)
                 cell.border = thin_border
-                if col == 5:  # amount column
+                if col == 6:  # amount column
                     if t.transaction_type == 'expense':
                         cell.font = Font(color='FF4D4F')
                     else:
