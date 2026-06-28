@@ -93,27 +93,33 @@ finance_app/
 
 ### 环境要求
 
-- Python 3.13+
-- Node.js 18+
-- MySQL 8.x（数据库名 `finance_app`，字符集 `utf8mb4`）
+| 依赖 | 版本 | 检查命令 |
+|------|------|----------|
+| Python | 3.13+ | `python3 --version` |
+| Node.js | 18+ | `node --version` |
+| MySQL | 8.x | `mysql --version` |
 
-### 1. 数据库
+### 1. 准备数据库
 
-```sql
-CREATE DATABASE finance_app CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+```bash
+mysql -u root -proot -e "CREATE DATABASE finance_app CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
 ```
 
-数据库配置在 `backend/config/settings.py`：
+数据库连接配置在 `backend/.env`（首次需自行创建）：
 
 ```
-HOST: 127.0.0.1
-PORT: 3306
-USER: root
-PASSWORD: root
-NAME: finance_app
+DB_NAME=finance_app
+DB_USER=root
+DB_PASSWORD=root
+DB_HOST=127.0.0.1
+DB_PORT=3306
 ```
 
-### 2. 后端
+> 若 MySQL 密码不是 `root`，修改 `.env` 中的 `DB_PASSWORD`。
+
+### 2. 首次安装
+
+后端：
 
 ```bash
 cd finance_app/backend
@@ -121,22 +127,41 @@ python -m venv venv
 source venv/bin/activate          # macOS/Linux
 pip install -r requirements.txt
 python manage.py migrate
-python manage.py runserver 8000
 ```
 
-### 3. 前端
+前端：
 
 ```bash
 cd finance_app/frontend
 npm install
-npm run dev                       # 启动在 http://localhost:3000
 ```
 
-### 4. 访问
+### 3. 日常启动
+
+每次开发需开两个终端，分别启动前后端。
+
+终端 1 — 后端：
+
+```bash
+cd finance_app/backend
+source venv/bin/activate
+python manage.py runserver 8000
+```
+
+终端 2 — 前端：
+
+```bash
+cd finance_app/frontend
+npm run dev                       # 默认 http://localhost:3000
+```
+
+> 前端通过 Vite proxy 将 `/api` 转发到 `http://127.0.0.1:8000`，故需先启动后端。
+
+### 4. 访问地址
 
 | 地址 | 说明 |
 |------|------|
-| http://localhost:3000 | 前端应用 |
+| http://localhost:3000 | 前端应用（端口以终端输出为准） |
 | http://localhost:8000/api/docs/ | Swagger API 文档 |
 | http://localhost:8000/admin/ | Django 后台管理 |
 
@@ -150,6 +175,8 @@ source venv/bin/activate
 python manage.py init_categories                  # 所有用户
 python manage.py init_categories --username admin  # 指定用户
 ```
+
+> 更详细的故障排查（端口占用、mysqlclient 安装、数据库连接失败等）见根目录 [STARTUP_GUIDE.md](../STARTUP_GUIDE.md)。
 
 ---
 
