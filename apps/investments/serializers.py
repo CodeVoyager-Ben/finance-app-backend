@@ -69,12 +69,6 @@ class InvestmentAccountSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'created_at']
 
-    def get_fields(self):
-        fields = super().get_fields()
-        if self.instance and getattr(self.instance, 'pk', None):
-            fields['balance'].read_only = True
-        return fields
-
     def _calc_holding_totals(self, obj):
         """一次遍历计算所有持仓汇总值"""
         cache = self.context.get('_holding_totals_cache', {})

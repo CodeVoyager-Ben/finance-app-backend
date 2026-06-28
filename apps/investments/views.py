@@ -88,6 +88,27 @@ class InvestmentAccountViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
 
+    def perform_update(self, serializer):
+        from datetime import date as date_type
+        instance = serializer.instance
+        old_balance = instance.balance
+        new_balance = serializer.validated_data.pop('balance', None)
+        with db_transaction.atomic():
+            instance = serializer.save()
+            if new_balance is not None and new_balance != old_balance:
+                diff = new_balance - old_balance
+                tx = InvestmentTransaction.objects.create(
+                    investment_account=instance,
+                    symbol='CASH',
+                    name='余额调整',
+                    transaction_type='deposit' if diff > 0 else 'withdraw',
+                    amount=abs(diff),
+                    date=date_type.today(),
+                    note='余额调整',
+                )
+                update_holding_from_transaction(tx)
+                instance.refresh_from_db(fields=['balance'])
+
     @action(detail=False, methods=['get'], url_path='security-lookup')
     def security_lookup(self, request):
         q = request.query_params.get('q', '').strip()

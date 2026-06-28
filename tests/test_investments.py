@@ -43,7 +43,7 @@ class InvestmentAccountTests(BaseTestCase):
         self.assertEqual(resp.data['holdings_count'], 1)
         self.assertEqual(float(resp.data['total_market_value']), 19000)
 
-    def test_edit_account_balance_readonly(self):
+    def test_edit_account_balance_creates_adjustment(self):
         acc = InvestmentAccount.objects.create(
             user=self.user, name='股票账户', asset_type=self.asset_type,
             currency='CNY', balance=10000,
@@ -51,7 +51,14 @@ class InvestmentAccountTests(BaseTestCase):
         resp = self.client.patch(f'/api/investments/{acc.id}/', {'balance': 99999})
         self.assertEqual(resp.status_code, 200)
         acc.refresh_from_db()
-        self.assertEqual(acc.balance, Decimal('10000'))
+        # 余额已更新为新值
+        self.assertEqual(acc.balance, Decimal('99999'))
+        # 自动生成一笔 deposit 调整流水，金额为差额
+        tx = InvestmentTransaction.objects.filter(
+            investment_account=acc, transaction_type='deposit', note='余额调整',
+        )
+        self.assertEqual(tx.count(), 1)
+        self.assertEqual(tx.first().amount, Decimal('89999'))
 
 
 class HoldingTests(BaseTestCase):

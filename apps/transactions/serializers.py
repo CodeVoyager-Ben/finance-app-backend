@@ -9,13 +9,6 @@ class AccountSerializer(serializers.ModelSerializer):
         fields = ['id', 'name', 'account_type', 'balance', 'icon', 'color', 'is_active', 'exclude_from_reports', 'created_at']
         read_only_fields = ['id', 'created_at']
 
-    def get_fields(self):
-        fields = super().get_fields()
-        # 编辑时 balance 只读，创建时可设置初始余额
-        if self.instance and getattr(self.instance, 'pk', None):
-            fields['balance'].read_only = True
-        return fields
-
 
 
 class CategorySerializer(serializers.ModelSerializer):

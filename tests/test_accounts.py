@@ -1,6 +1,8 @@
 from tests.base import BaseTestCase
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import AccessToken
+from decimal import Decimal
+from apps.transactions.models import Transaction
 
 
 class AccountTests(BaseTestCase):
@@ -32,6 +34,27 @@ class AccountTests(BaseTestCase):
         resp = self.client.patch(f'/api/accounts/{acc.id}/', {'name': '新名称'})
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.data['name'], '新名称')
+
+    def test_edit_balance_creates_adjustment(self):
+        acc = self.create_account(name='现金', balance=1000)
+        resp = self.client.patch(f'/api/accounts/{acc.id}/', {'balance': 1500})
+        self.assertEqual(resp.status_code, 200)
+        acc.refresh_from_db()
+        self.assertEqual(acc.balance, Decimal('1500'))
+        # 上调余额生成一笔收入调整流水，金额为差额
+        tx = Transaction.objects.filter(
+            account=acc, transaction_type='income', note='余额调整',
+        )
+        self.assertEqual(tx.count(), 1)
+        self.assertEqual(tx.first().amount, Decimal('500'))
+
+    def test_edit_balance_unchanged_no_transaction(self):
+        acc = self.create_account(name='现金', balance=1000)
+        resp = self.client.patch(f'/api/accounts/{acc.id}/', {'balance': 1000})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(
+            Transaction.objects.filter(account=acc, note='余额调整').count(), 0
+        )
 
     def test_delete_account(self):
         acc = self.create_account(name='待删除')

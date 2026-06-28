@@ -6,7 +6,7 @@ from django.db import transaction as db_transaction
 from django.db.models import F, Sum, Count, Q
 from django.db.models.functions import TruncMonth
 from django.utils import timezone
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 
 from .models import Account, Category, Transaction, Budget
 from .serializers import (
@@ -25,6 +25,27 @@ class AccountViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
+
+    def perform_update(self, serializer):
+        instance = serializer.instance
+        old_balance = instance.balance
+        new_balance = serializer.validated_data.pop('balance', None)
+        with db_transaction.atomic():
+            instance = serializer.save()
+            if new_balance is not None and new_balance != old_balance:
+                diff = new_balance - old_balance
+                Transaction.objects.create(
+                    user=instance.user,
+                    account=instance,
+                    transaction_type='income' if diff > 0 else 'expense',
+                    amount=abs(diff),
+                    date=date.today(),
+                    note='余额调整',
+                )
+                Account.objects.filter(pk=instance.pk).update(
+                    balance=F('balance') + diff
+                )
+                instance.refresh_from_db(fields=['balance'])
 
 
 class CategoryViewSet(viewsets.ModelViewSet):
